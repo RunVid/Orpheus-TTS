@@ -74,7 +74,7 @@ def load_model(model_path, disable_compile=False):
     return model
 
 def generate_speech(prompt, voice="tara", temperature=0.6, top_p=0.8, max_tokens=1200, 
-                    stop_token_ids=[49158], repetition_penalty=1.3):
+                    stop_token_ids=[49158], repetition_penalty=1.3, timeout=60):
     """Generate speech using the globally loaded model with lock protection"""
     global global_model
     
@@ -91,21 +91,54 @@ def generate_speech(prompt, voice="tara", temperature=0.6, top_p=0.8, max_tokens
         try:
             # Generate speech
             print(f"Starting generation for request {request_id}")
+            print(prompt)  # Print the actual prompt for debugging
             
             try:
-                syn_tokens = global_model.generate_speech(
-                    prompt=prompt,
-                    voice=voice,
-                    request_id=request_id,
-                    temperature=temperature,
-                    top_p=top_p,
-                    max_tokens=max_tokens,
-                    stop_token_ids=stop_token_ids,
-                    repetition_penalty=repetition_penalty
-                )
+                # Set up generation with timeout
+                import signal
                 
-                # Convert generator to list to ensure all tokens are generated
-                syn_tokens_list = list(syn_tokens)
+                class TimeoutError(Exception):
+                    pass
+                
+                def timeout_handler(signum, frame):
+                    raise TimeoutError(f"Generation timed out after {timeout} seconds")
+                
+                # Set timeout handler if platform supports it
+                if hasattr(signal, 'SIGALRM'):
+                    # Register timeout handler
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(timeout)
+                
+                try:
+                    # Generate speech
+                    syn_tokens_generator = global_model.generate_speech(
+                        prompt=prompt,
+                        voice=voice,
+                        request_id=request_id,
+                        temperature=temperature,
+                        top_p=top_p,
+                        max_tokens=max_tokens,
+                        stop_token_ids=stop_token_ids,
+                        repetition_penalty=repetition_penalty
+                    )
+                    
+                    # Force immediate evaluation by creating a list (with timeout monitoring)
+                    syn_tokens_list = []
+                    chunk_count = 0
+                    for chunk in syn_tokens_generator:
+                        syn_tokens_list.append(chunk)
+                        chunk_count += 1
+                        if chunk_count % 10 == 0:
+                            print(f"Received {chunk_count} audio chunks so far...")
+                    
+                    # Reset timeout
+                    if hasattr(signal, 'SIGALRM'):
+                        signal.alarm(0)
+                
+                except TimeoutError as e:
+                    print(f"Generation timeout: {e}")
+                    raise
+                
                 print(f"Generation produced {len(syn_tokens_list)} chunks")
                 
                 if not syn_tokens_list:
@@ -149,6 +182,10 @@ def generate_speech(prompt, voice="tara", temperature=0.6, top_p=0.8, max_tokens
                 import traceback
                 traceback.print_exc()
                 raise inner_e
+            finally:
+                # Always clear the alarm if set
+                if hasattr(signal, 'SIGALRM'):
+                    signal.alarm(0)
             
         except Exception as e:
             print(f"Error in request {request_id}: {str(e)}")
@@ -231,6 +268,15 @@ def create_interface(model_path):
                         step=0.05,
                         info="Penalize repeated tokens. Higher values reduce repetition"
                     )
+                    
+                    timeout = gr.Slider(
+                        label="Generation Timeout (seconds)",
+                        minimum=10,
+                        maximum=300,
+                        value=60,
+                        step=10,
+                        info="Maximum time to wait for generation before timing out"
+                    )
                 
                 generate_btn = gr.Button("Generate Speech", variant="primary")
                 status_msg = gr.Textbox(label="Status", value="Ready", interactive=False)
@@ -249,7 +295,7 @@ def create_interface(model_path):
                 with gr.Accordion("Generation Info", open=False):
                     gen_params_display = gr.JSON(label="Parameters Used")
         
-        def process_text(text_input, voice, temperature, top_p, max_tokens, repetition_penalty):
+        def process_text(text_input, voice, temperature, top_p, max_tokens, repetition_penalty, timeout):
             try:
                 # Create a unique filename for each request to avoid conflicts
                 unique_id = str(uuid.uuid4())[:8]
@@ -262,6 +308,7 @@ def create_interface(model_path):
                     "top_p": top_p,
                     "max_tokens": max_tokens,
                     "repetition_penalty": repetition_penalty,
+                    "timeout": timeout,
                     "text_length": len(text_input)
                 }
                 
@@ -285,7 +332,8 @@ def create_interface(model_path):
                     temperature=temperature,
                     top_p=top_p,
                     max_tokens=max_tokens,
-                    repetition_penalty=repetition_penalty
+                    repetition_penalty=repetition_penalty,
+                    timeout=timeout
                 )
                 
                 # Check if we got valid audio data
@@ -321,7 +369,7 @@ def create_interface(model_path):
         
         generate_btn.click(
             fn=process_text,
-            inputs=[text_input, voice, temperature, top_p, max_tokens, repetition_penalty],
+            inputs=[text_input, voice, temperature, top_p, max_tokens, repetition_penalty, timeout],
             outputs=[audio_output, duration_output, generation_time, gen_params_display],
             show_progress=True
         ).then(
