@@ -3,6 +3,8 @@ from orpheus_tts import OrpheusModel
 import wave
 import os
 import uuid
+import gc  # Added garbage collection
+import torch  # Added torch import
 
 # Global variable - only store the model
 model = None
@@ -41,6 +43,10 @@ def generate_speech(prompt, voice="tara"):
         
         for audio_chunk in syn_tokens:
             wf.writeframes(audio_chunk)
+    
+    # Force a cleanup after generation
+    torch.cuda.empty_cache()
+    gc.collect()
     
     print(f"Audio saved to: {filename}")
     return filename
