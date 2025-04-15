@@ -9,6 +9,7 @@ import threading
 import uuid
 import os
 import gc
+import sys
 
 # Global variables
 global_model = None
@@ -16,9 +17,15 @@ model_lock = threading.Lock()
 output_dir = "outputs"
 model_load_stats = {}
 
-def load_model(model_path):
+def load_model(model_path, disable_compile=False):
     """Load the Orpheus TTS model once and return it with detailed timing stats"""
     global model_load_stats
+    
+    # Disable compilation if requested
+    if disable_compile:
+        print("Disabling PyTorch compilation for faster loading (may affect inference speed)")
+        os.environ["VLLM_USE_CUDA_GRAPH"] = "0"
+        os.environ["VLLM_USE_TORCH_COMPILE"] = "0"
     
     print(f"Loading Orpheus TTS model from: {model_path}")
     total_start_time = time.monotonic()
@@ -51,7 +58,8 @@ def load_model(model_path):
         "init_time": init_time,
         "warmup_time": warmup_time,
         "loaded_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-        "model_path": model_path
+        "model_path": model_path,
+        "compilation_disabled": disable_compile
     }
     
     # Print summary
@@ -59,6 +67,7 @@ def load_model(model_path):
     print(f"  - Initialization time: {init_time:.2f} seconds")
     print(f"  - Warm-up time: {warmup_time:.2f} seconds")
     print(f"  - Total loading time: {total_load_time:.2f} seconds")
+    print(f"  - Compilation disabled: {disable_compile}")
     
     return model
 
@@ -141,6 +150,7 @@ def create_interface(model_path):
                 - **Initialization Time**: {model_load_stats['init_time']:.2f} seconds
                 - **Warm-up Time**: {model_load_stats['warmup_time']:.2f} seconds
                 - **Total Loading Time**: {model_load_stats['total_time']:.2f} seconds
+                - **Compilation Disabled**: {model_load_stats['compilation_disabled']}
                 """)
         
         with gr.Row():
@@ -289,11 +299,17 @@ if __name__ == "__main__":
                         help='Create a shareable link for the interface')
     parser.add_argument('--skip-warmup', action='store_true',
                         help='Skip the warm-up generation during model loading')
+    parser.add_argument('--fast-load', action='store_true',
+                        help='Disable PyTorch compilation for faster loading (may affect inference speed)')
     args = parser.parse_args()
+    
+    # Set environment variables if fast-load is requested
+    if args.fast_load:
+        print("Fast loading enabled - PyTorch compilation will be disabled")
     
     # Load the model once at startup
     print("Initializing Orpheus TTS model...")
-    global_model = load_model(args.model_path)
+    global_model = load_model(args.model_path, disable_compile=args.fast_load)
     
     # Create and launch the interface
     print("Starting Gradio web interface...")
