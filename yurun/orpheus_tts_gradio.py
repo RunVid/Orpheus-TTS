@@ -6,16 +6,26 @@ import time
 import numpy as np
 import multiprocessing
 
-def generate_speech(model_path, prompt, voice="tara"):
-    # Initialize the model
-    model = OrpheusModel(
-        model_name=model_path,
-    )
+# Global variable to store the loaded model
+global_model = None
+
+def load_model(model_path):
+    """Load the Orpheus TTS model once and return it"""
+    print(f"Loading Orpheus TTS model from: {model_path}")
+    start_time = time.monotonic()
+    model = OrpheusModel(model_name=model_path)
+    end_time = time.monotonic()
+    print(f"Model loaded in {end_time - start_time:.2f} seconds")
+    return model
+
+def generate_speech(prompt, voice="tara"):
+    """Generate speech using the globally loaded model"""
+    global global_model
     
     start_time = time.monotonic()
     
     # Generate speech
-    syn_tokens = model.generate_speech(
+    syn_tokens = global_model.generate_speech(
         prompt=prompt,
         voice=voice,
     )
@@ -44,22 +54,16 @@ def generate_speech(model_path, prompt, voice="tara"):
     # Return audio data and generation stats
     return wav_buffer, duration, generation_time
 
-def create_interface():
+def create_interface(model_path):
     # Default values
-    default_model_path = "/home/ubuntu/models/orpheus-3b-0.1-ft"
     default_prompt = '''Man, the way social media has, um, completely changed how we interact is just wild, right? Like, we're all connected 24/7 but somehow people feel more alone than ever. And don't even get me started on how it's messing with kids' self-esteem and mental health and whatnot.'''
     
     with gr.Blocks(title="Orpheus TTS Demo") as demo:
         gr.Markdown("# Orpheus TTS Web Interface")
+        gr.Markdown(f"### Using model: {model_path}")
         
         with gr.Row():
             with gr.Column():
-                model_path = gr.Textbox(
-                    label="Model Path", 
-                    value=default_model_path,
-                    info="Path to the Orpheus TTS model"
-                )
-                
                 text_input = gr.Textbox(
                     label="Text to Synthesize",
                     value=default_prompt,
@@ -86,9 +90,9 @@ def create_interface():
                     duration_output = gr.Textbox(label="Audio Duration (seconds)")
                     generation_time = gr.Textbox(label="Generation Time (seconds)")
         
-        def process_text(model_path, text_input, voice):
+        def process_text(text_input, voice):
             try:
-                wav_buffer, duration, gen_time = generate_speech(model_path, text_input, voice)
+                wav_buffer, duration, gen_time = generate_speech(text_input, voice)
                 
                 # Save to temporary file for Gradio to display
                 temp_filename = "output.wav"
@@ -101,7 +105,7 @@ def create_interface():
         
         generate_btn.click(
             fn=process_text,
-            inputs=[model_path, text_input, voice],
+            inputs=[text_input, voice],
             outputs=[audio_output, duration_output, generation_time]
         )
     
@@ -109,5 +113,22 @@ def create_interface():
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    app = create_interface()
+    
+    # Default model path
+    default_model_path = "/home/ubuntu/models/orpheus-3b-0.1-ft"
+    
+    # Command line arguments for model path
+    import argparse
+    parser = argparse.ArgumentParser(description='Orpheus TTS Gradio Interface')
+    parser.add_argument('--model_path', type=str, default=default_model_path,
+                        help=f'Path to the Orpheus TTS model (default: {default_model_path})')
+    args = parser.parse_args()
+    
+    # Load the model once at startup
+    print("Initializing Orpheus TTS model...")
+    global_model = load_model(args.model_path)
+    
+    # Create and launch the interface
+    print("Starting Gradio web interface...")
+    app = create_interface(args.model_path)
     app.launch(share=True) 

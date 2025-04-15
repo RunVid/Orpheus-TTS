@@ -18,11 +18,19 @@ Run the following command:
 python yurun/orpheus_tts_gradio.py
 ```
 
-This will start a local Gradio server and provide you with a URL to access the web interface.
+This will:
+1. Load the model from the default path ("/home/ubuntu/models/orpheus-3b-0.1-ft")
+2. Start a local Gradio server and provide you with a URL to access the web interface
+
+To specify a custom model path:
+
+```
+python yurun/orpheus_tts_gradio.py --model_path "/path/to/your/model"
+```
 
 ## Features
 
-- Input a model path (defaults to "/home/ubuntu/models/orpheus-3b-0.1-ft")
+- The model is loaded once at startup for better performance
 - Enter text to convert to speech
 - Select from various voices
 - Generate and play speech directly in the browser
@@ -31,7 +39,7 @@ This will start a local Gradio server and provide you with a URL to access the w
 
 ## Usage
 
-1. Enter the path to your Orpheus TTS model (or use the default)
+1. Wait for the model to fully load (this may take some time)
 2. Type or paste the text you want to convert to speech
 3. Select a voice from the dropdown menu
 4. Click the "Generate Speech" button
