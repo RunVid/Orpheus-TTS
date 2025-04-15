@@ -2,6 +2,7 @@ import gradio as gr
 from orpheus_tts import OrpheusModel
 import wave
 import os
+import uuid
 
 # Global variable - only store the model
 model = None
@@ -30,7 +31,6 @@ def generate_speech(prompt, voice="tara"):
     )
     
     # Generate unique filename
-    import uuid
     filename = os.path.join(output_dir, f"output_{uuid.uuid4()}.wav")
     
     # Save to WAV file
