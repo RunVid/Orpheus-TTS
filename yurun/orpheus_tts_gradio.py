@@ -24,8 +24,10 @@ def load_model(model_path, disable_compile=False):
     # Disable compilation if requested
     if disable_compile:
         print("Disabling PyTorch compilation for faster loading (may affect inference speed)")
+        # These environment variables are based on vLLM logs and common settings
+        # If they don't work, check vLLM documentation for correct variables
         os.environ["VLLM_USE_CUDA_GRAPH"] = "0"
-        os.environ["VLLM_USE_TORCH_COMPILE"] = "0"
+        os.environ["VLLM_DISABLE_TORCH_COMPILE"] = "1"
     
     print(f"Loading Orpheus TTS model from: {model_path}")
     total_start_time = time.monotonic()
