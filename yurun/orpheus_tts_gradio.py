@@ -24,8 +24,8 @@ def load_model(model_path, disable_compile=False):
     # Disable compilation if requested
     if disable_compile:
         print("Disabling PyTorch compilation for faster loading (may affect inference speed)")
-        # These environment variables are based on vLLM logs and common settings
-        # If they don't work, check vLLM documentation for correct variables
+        # These environment variables are based on vLLM documentation
+        # See: https://docs.vllm.ai/en/latest/getting_started/configuration.html
         os.environ["VLLM_USE_CUDA_GRAPH"] = "0"
         os.environ["VLLM_DISABLE_TORCH_COMPILE"] = "1"
     
@@ -82,6 +82,7 @@ def generate_speech(prompt, voice="tara", temperature=0.6, top_p=0.8, max_tokens
     request_id = str(uuid.uuid4())
     print(f"Processing request {request_id} for voice: {voice}")
     print(f"Generation parameters: temp={temperature}, top_p={top_p}, max_tokens={max_tokens}, rep_penalty={repetition_penalty}")
+    print(f"Input text length: {len(prompt)} characters")
     
     start_time = time.monotonic()
     
@@ -90,46 +91,69 @@ def generate_speech(prompt, voice="tara", temperature=0.6, top_p=0.8, max_tokens
         try:
             # Generate speech
             print(f"Starting generation for request {request_id}")
-            syn_tokens = global_model.generate_speech(
-                prompt=prompt,
-                voice=voice,
-                request_id=request_id,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                stop_token_ids=stop_token_ids,
-                repetition_penalty=repetition_penalty
-            )
             
-            # Create in-memory wave file
-            wav_buffer = io.BytesIO()
-            with wave.open(wav_buffer, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(24000)
+            try:
+                syn_tokens = global_model.generate_speech(
+                    prompt=prompt,
+                    voice=voice,
+                    request_id=request_id,
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_tokens=max_tokens,
+                    stop_token_ids=stop_token_ids,
+                    repetition_penalty=repetition_penalty
+                )
                 
-                total_frames = 0
-                for audio_chunk in syn_tokens:
-                    frame_count = len(audio_chunk) // (wf.getsampwidth() * wf.getnchannels())
-                    total_frames += frame_count
-                    wf.writeframes(audio_chunk)
+                # Convert generator to list to ensure all tokens are generated
+                syn_tokens_list = list(syn_tokens)
+                print(f"Generation produced {len(syn_tokens_list)} chunks")
                 
-                duration = total_frames / wf.getframerate()
-            
-            # Reset buffer position
-            wav_buffer.seek(0)
-            
-            # Force garbage collection after generation
-            gc.collect()
-            
-            end_time = time.monotonic()
-            generation_time = end_time - start_time
-            print(f"Generation completed for request {request_id} in {generation_time:.2f} seconds")
-            
-            return wav_buffer, duration, generation_time
+                if not syn_tokens_list:
+                    raise Exception("No audio chunks were generated")
+                
+                # Create in-memory wave file
+                wav_buffer = io.BytesIO()
+                with wave.open(wav_buffer, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(24000)
+                    
+                    total_frames = 0
+                    for audio_chunk in syn_tokens_list:
+                        if not isinstance(audio_chunk, bytes):
+                            print(f"Warning: Expected bytes but got {type(audio_chunk)}")
+                            continue
+                            
+                        frame_count = len(audio_chunk) // (wf.getsampwidth() * wf.getnchannels())
+                        total_frames += frame_count
+                        wf.writeframes(audio_chunk)
+                    
+                    duration = total_frames / wf.getframerate()
+                    print(f"Audio duration: {duration:.2f} seconds from {total_frames} frames")
+                
+                # Reset buffer position
+                wav_buffer.seek(0)
+                
+                # Force garbage collection after generation
+                gc.collect()
+                
+                end_time = time.monotonic()
+                generation_time = end_time - start_time
+                print(f"Generation completed for request {request_id} in {generation_time:.2f} seconds")
+                
+                return wav_buffer, duration, generation_time
+                
+            except Exception as inner_e:
+                print(f"Error during generation: {str(inner_e)}")
+                print(f"Exception type: {type(inner_e)}")
+                import traceback
+                traceback.print_exc()
+                raise inner_e
             
         except Exception as e:
             print(f"Error in request {request_id}: {str(e)}")
+            import traceback
+            traceback.print_exc()
             raise e
 
 def create_interface(model_path):
@@ -241,10 +265,20 @@ def create_interface(model_path):
                     "text_length": len(text_input)
                 }
                 
+                # Validate input
+                if not text_input or len(text_input.strip()) == 0:
+                    error_msg = "Error: Input text cannot be empty"
+                    print(error_msg)
+                    yield None, error_msg, error_msg, {"error": error_msg}
+                    return
+                
                 # Update status
-                yield temp_filename, "Processing...", "Processing...", params
+                status_message = "Processing request..."
+                print(status_message)
+                yield temp_filename, status_message, status_message, params
                 
                 # Generate the speech
+                print(f"Sending generation request with params: {params}")
                 wav_buffer, duration, gen_time = generate_speech(
                     prompt=text_input, 
                     voice=voice,
@@ -254,22 +288,36 @@ def create_interface(model_path):
                     repetition_penalty=repetition_penalty
                 )
                 
+                # Check if we got valid audio data
+                if wav_buffer.getbuffer().nbytes == 0:
+                    raise Exception("Generated audio buffer is empty")
+                
                 # Save to file for Gradio to display
+                print(f"Saving audio to file: {temp_filename}")
                 with open(temp_filename, "wb") as f:
                     f.write(wav_buffer.getvalue())
+                
+                # Verify the file was created and has content
+                if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
+                    raise Exception(f"Failed to save audio file or file is empty: {temp_filename}")
                 
                 # Update parameters with results
                 params["duration"] = f"{duration:.2f}s"
                 params["generation_time"] = f"{gen_time:.2f}s"
                 params["rtf"] = f"{gen_time/duration:.2f}x" if duration > 0 else "N/A"
+                params["file_size"] = f"{os.path.getsize(temp_filename) / 1024:.2f} KB"
                 
                 # Return results
+                result_message = f"Generation completed in {gen_time:.2f}s"
+                print(result_message)
                 yield temp_filename, f"{duration:.2f}", f"{gen_time:.2f}", params
                 
             except Exception as e:
+                import traceback
                 error_msg = f"Error: {str(e)}"
                 print(error_msg)
-                yield None, "Error", error_msg, {"error": str(e)}
+                traceback.print_exc()
+                yield None, "Error", error_msg, {"error": str(e), "traceback": traceback.format_exc()}
         
         generate_btn.click(
             fn=process_text,
@@ -281,6 +329,16 @@ def create_interface(model_path):
             inputs=None,
             outputs=status_msg
         )
+    
+    # Add system info display
+    with gr.Accordion("System Information", open=False):
+        system_info = {
+            "Python Version": sys.version,
+            "Gradio Version": gr.__version__,
+            "Platform": sys.platform,
+            "Output Directory": os.path.abspath(output_dir)
+        }
+        gr.JSON(value=system_info, label="System Info")
     
     return demo
 
