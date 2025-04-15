@@ -25,7 +25,8 @@ def generate_speech(prompt, voice="tara"):
     # Generate speech directly
     syn_tokens = model.generate_speech(
         prompt=prompt,
-        voice=voice
+        voice=voice,
+        request_id=str(uuid.uuid4())
     )
     
     # Generate unique filename
