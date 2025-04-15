@@ -298,7 +298,7 @@ if __name__ == "__main__":
     # Create and launch the interface
     print("Starting Gradio web interface...")
     app = create_interface(args.model_path)
-    app.queue(concurrency_count=1).launch(
+    app.queue().launch(
         server_name="0.0.0.0",
         server_port=args.port,
         share=args.share
